@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Bản đồ Hà Nội - Routing & TSP</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        body {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        #sidebar {
+            width: 280px;
+            max-width: 30%;
+            background: #f9fafb;
+            border-right: 1px solid #e5e7eb;
+            box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
+            padding: 16px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            z-index: 1000;
+        }
+        #map {
+            flex: 1;
+            width: 100%;
+            height: 100%;
+        }
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #111827;
+        }
+        .search-row {
+            display: flex;
+            gap: 8px;
+        }
+        #searchInput {
+            flex: 1;
+            border-radius: 999px;
+            border: 1px solid #d1d5db;
+            padding: 8px 12px;
+            font-size: 13px;
+            outline: none;
+        }
+        #searchInput:focus {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.4);
+        }
+        button {
+            border-radius: 999px;
+            padding: 8px 14px;
+            border: none;
+            background: #2563eb;
+            color: white;
+            font-size: 13px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        button.secondary {
+            background: #e5e7eb;
+            color: #111827;
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: default;
+        }
+        .mode-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #status {
+            font-size: 12px;
+            color: #4b5563;
+        }
+        #runtime {
+            font-size: 12px;
+            color: #4b5563;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <div>
+            <div class="section-title">Tìm kiếm địa điểm</div>
+            <div class="search-row" style="margin-top: 8px;">
+                <input id="searchInput" type="text" placeholder="Nhập địa điểm ở Hà Nội (VD: Hồ Gươm)" />
+                <button id="searchBtn">Tìm</button>
+            </div>
+        </div>
+        <div>
+            <div class="section-title">Chế độ chọn điểm</div>
+            <div class="mode-buttons" style="margin-top: 8px;">
+                <button id="modeRouting">Chế độ: 2 điểm</button>
+                <button id="modeTsp" class="secondary">Chế độ: Nhiều điểm (TSP)</button>
+            </div>
+        </div>
+        <div>
+            <div class="section-title">Thao tác</div>
+            <button id="clear" style="margin-top: 8px;">Xóa tất cả điểm</button>
+        </div>
+        <div id="runtime"></div>
+        <div id="status">Nhấn vào bản đồ để chọn điểm.</div>
+    </div>
+    <div id="map"></div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script>
+        const map = L.map('map').setView([21.0278, 105.8342], 13);  
+        let tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors',
+            subdomains: 'abc',
+            crossOrigin: true
+        });
+        const cartoLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            subdomains: 'abcd',
+            maxZoom: 19,
+            crossOrigin: true
+        });
+        let currentLayer = tileLayer;
+        let errorCount = 0;
+        const MAX_ERRORS = 15;
+        tileLayer.on('tileerror', function (error, tile) {
+            errorCount++;
+            console.warn('Tile load error (' + errorCount + '):', error);
+            if (errorCount >= MAX_ERRORS && currentLayer === tileLayer && !map.hasLayer(cartoLayer)) {
+                console.log('Switching to CartoDB tiles...');
+                currentLayer = cartoLayer;
+                tileLayer.remove();
+                cartoLayer.addTo(map);
+                errorCount = 0;  
+            }
+        });
+        tileLayer.addTo(map);
+        let mode = 'route';  
+        let markers = [];
+        let searchMarker = null;
+        let polyline = null;
+        const statusEl = document.getElementById('status');
+        const runtimeEl = document.getElementById('runtime');
+        function setStatus(text) {
+            statusEl.textContent = text;
+        }
+        function setRuntime(text) {
+            if (!text) {
+                runtimeEl.textContent = '';
+                runtimeEl.style.display = 'none';
+                return;
+            }
+            runtimeEl.textContent = text;
+            runtimeEl.style.display = 'block';
+        }
+        function formatRuntimeMs(ms) {
+            if (typeof ms !== 'number' || !Number.isFinite(ms)) {
+                return '';
+            }
+            if (ms < 1000) {
+                return ms.toFixed(1) + ' ms';
+            }
+            return (ms / 1000).toFixed(2) + ' s';
+        }
+        function clearAll() {
+            markers.forEach(m => map.removeLayer(m));
+            markers = [];
+            if (polyline) {
+                map.removeLayer(polyline);
+                polyline = null;
+            }
+            setRuntime('');
+            setStatus('Nhấn vào bản đồ để chọn điểm.');
+        }
+        document.getElementById('clear').onclick = clearAll;
+        async function searchLocation() {
+            const q = document.getElementById('searchInput').value.trim();
+            if (!q) return;
+            setStatus('Đang tìm kiếm: ' + q + ' ...');
+            try {
+                const url = 'https://nominatim.openstreetmap.org/search?format=json&q='
+                    + encodeURIComponent(q + ', Hanoi, Vietnam')
+                    + '&limit=1';
+                const resp = await fetch(url, {
+                    headers: {
+                        'Accept-Language': 'vi',
+                        'User-Agent': 'hanoi-routing-app'
+                    }
+                });
+                const results = await resp.json();
+                if (!results || results.length === 0) {
+                    setStatus('Không tìm thấy địa điểm phù hợp.');
+                    return;
+                }
+                const r = results[0];
+                const lat = parseFloat(r.lat);
+                const lon = parseFloat(r.lon);
+                const ll = [lat, lon];
+                if (searchMarker) {
+                    map.removeLayer(searchMarker);
+                }
+                searchMarker = L.marker(ll, { title: r.display_name }).addTo(map);
+                map.setView(ll, 16);
+                setStatus('Đã tìm thấy: ' + r.display_name);
+            } catch (e) {
+                console.error(e);
+                setStatus('Lỗi khi tìm kiếm địa điểm.');
+            }
+        }
+        document.getElementById('searchBtn').onclick = searchLocation;
+        document.getElementById('searchInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                searchLocation();
+            }
+        });
+        document.getElementById('modeRouting').onclick = () => {
+            mode = 'route';
+            document.getElementById('modeRouting').classList.remove('secondary');
+            document.getElementById('modeTsp').classList.add('secondary');
+            clearAll();
+            setStatus('Chế độ 2 điểm: chọn điểm bắt đầu và điểm kết thúc.');
+        };
+        document.getElementById('modeTsp').onclick = () => {
+            mode = 'tsp';
+            document.getElementById('modeTsp').classList.remove('secondary');
+            document.getElementById('modeRouting').classList.add('secondary');
+            clearAll();
+            setStatus('Chế độ TSP: chọn nhiều điểm, sau đó chọn thêm 1 điểm để tính đường đi ngắn nhất qua tất cả.');
+        };
+        map.on('click', async (e) => {
+            const marker = L.marker(e.latlng).addTo(map);
+            markers.push(marker);
+            if (mode === 'route' && markers.length === 2) {
+                const [m1, m2] = markers;
+                const from = m1.getLatLng();
+                const to = m2.getLatLng();
+                setStatus('Đang tính đường đi ngắn nhất giữa 2 điểm...');
+                await fetchRoute(from, to);
+            } else if (mode === 'tsp' && markers.length >= 2) {
+                const pts = markers.map(m => m.getLatLng());
+                setStatus('Đang tính đường đi TSP qua ' + pts.length + ' điểm (tối ưu bằng brute-force, n nhỏ)...');
+                await fetchTsp(pts);
+            }
+        });
+        async function fetchRoute(from, to) {
+            if (polyline) {
+                map.removeLayer(polyline);
+                polyline = null;
+            }
+            try {
+                setRuntime('');
+                const params = new URLSearchParams({
+                    fromLat: from.lat,
+                    fromLon: from.lng,
+                    toLat: to.lat,
+                    toLon: to.lng
+                });
+                const resp = await fetch('/api/route?' + params.toString());
+                const data = await resp.json();
+                if (typeof data.processingMs === 'number') {
+                    setRuntime('Thời gian xử lý: ' + formatRuntimeMs(data.processingMs));
+                }
+                if (!resp.ok || data.error) {
+                    setStatus('Lỗi: ' + (data.error || 'Không tìm thấy đường đi giữa 2 điểm này.'));
+                    return;
+                }
+                if (!data.points || data.points.length === 0) {
+                    setStatus('Không tìm thấy đường đi giữa 2 điểm này.');
+                    return;
+                }
+                const latlngs = data.points.map(p => [p.lat, p.lon]);
+                polyline = L.polyline(latlngs, { color: 'blue', weight: 4 }).addTo(map);
+                map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
+                setStatus('Đường đi ngắn nhất đã được vẽ.');
+            } catch (e) {
+                console.error('Routing error:', e);
+                setRuntime('');
+                setStatus('Lỗi khi tính đường đi: ' + e.message);
+            }
+        }
+        async function fetchTsp(points) {
+            if (polyline) {
+                map.removeLayer(polyline);
+                polyline = null;
+            }
+            try {
+                setRuntime('');
+                const body = points.map(p => ({ lat: p.lat, lon: p.lng }));
+                const resp = await fetch('/api/tsp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await resp.json();
+                if (typeof data.processingMs === 'number') {
+                    setRuntime('Thời gian xử lý: ' + formatRuntimeMs(data.processingMs));
+                }
+                if (!resp.ok || data.error) {
+                    setStatus('Lỗi: ' + (data.error || 'Không thể tính đường đi TSP.'));
+                    return;
+                }
+                if (!data.points || data.points.length === 0) {
+                    setStatus('Không tìm thấy đường đi TSP.');
+                    return;
+                }
+                const latlngs = data.points.map(p => [p.lat, p.lon]);
+                polyline = L.polyline(latlngs, { color: 'red', weight: 4 }).addTo(map);
+                map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
+                setStatus('Đường đi TSP gần tối ưu đã được vẽ.');
+            } catch (e) {
+                console.error('TSP error:', e);
+                setRuntime('');
+                setStatus('Lỗi khi tính đường đi TSP: ' + e.message);
+            }
+        }
+    </script>
+</body>
+</html>
