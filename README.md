@@ -74,5 +74,5 @@ Khi server đã khởi động, mở trình duyệt web và truy cập:
 ## Công nghệ sử dụng
 
 - **Backend**: Java 17, Spark Java (Web Framework).
-- **Routing Engine**: Tự cài đặt thuật toán A* (SimpleRoutingEngine) & Tích hợp GraphHopper.
+- **Routing Engine**: Thuật toán A* (SimpleRoutingEngine) & Tích hợp GraphHopper.
 - **Frontend**: HTML5, Leaflet.js, OpenStreetMap tiles.
