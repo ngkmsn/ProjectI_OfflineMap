@@ -31,7 +31,7 @@ Một ứng dụng Java nhẹ sử dụng dữ liệu OpenStreetMap (OSM) để:
 
 ## Cách chạy ứng dụng
 
-Bạn có thể chạy ứng dụng trên bất kỳ máy nào (macOS, Linux, Windows) đã cài Java và Maven.
+Ứng dụng có thể chạy trên bất kì nền tảng nào (macOS, Linux, Windows) đã cài Java và Maven.
 
 ### Cách 1: Sử dụng Script (Linux/macOS)
 
